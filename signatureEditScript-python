@@ -1,0 +1,167 @@
+#!/bin/python
+from os import walk
+import os, getpass, sys
+import subprocess
+from SystemConfiguration import SCDynamicStoreCopyConsoleUser
+
+userName = (SCDynamicStoreCopyConsoleUser(None, None, None) or [None])[0]
+currentUser = getpass.getuser()
+print("Running script as %s" % currentUser)
+scriptInstallDir = "/Library/Scripts/$company/signatures/"
+signatureFolder = "/Users/" + userName + "/Library/Group Containers/UBF8T346G9.Office/Outlook/Outlook 15 Profiles/Main Profile/Data/Signatures"
+print "Signature folder " + signatureFolder
+
+def runEccl(adAttribute):
+    ecclDir = "/Applications/Enterprise Connect.app/Contents/SharedSupport/"
+    try:
+        e2 = subprocess.Popen([ecclDir + 'eccl', '-r'], stdout=subprocess.PIPE)
+        e1 = subprocess.Popen([ecclDir + 'eccl', '-p', 'connectionStatus'], stdout=subprocess.PIPE)
+        command = e1.communicate()
+        if "false" in command[0]:
+            print("Enterprise Connect is not connected to the corporate network.")
+            return ""
+    except Exception as error:
+        print("Failed to run Enterprise Connect eccl with Error: %s" % error)
+        return
+    
+    try:
+        # Return true or false if the user is in the group
+        e1 = subprocess.Popen([ecclDir + 'eccl', '-a', adAttribute], stdout=subprocess.PIPE)
+        output, err = e1.communicate()
+        output = str(str(str(output).split(":",1)[1]).lstrip(' ')).rstrip()
+        return output
+    except Exception as error:
+        print("Failed to run attribute lookup with Error: %s " % error)
+        return 
+
+class UserInfo:
+    firstName = "First Name"
+    jobTitle = "Job Title"
+    phoneNumber = "1-555-555-5555"
+    emailAddress = "email@$company.com"
+
+    def __init__(self):
+        self.firstName = runEccl("givenName")
+        self.jobTitle = runEccl("title")
+        self.phoneNumber = runEccl("telephoneNumber")
+        self.emailAddress = runEccl("mail")
+
+userData = UserInfo()
+
+class $companySignature:
+    title = ""
+    keyphrase = ""
+    installScript = ""
+    exists = False
+    required = False
+    signatureFilePath = ""
+    adGroupMembership = ""
+
+    def __init__(self, signatureTitle, keyphrase, installScript, adGroupMembership):
+        self.title = signatureTitle
+        self.keyphrase = keyphrase
+        self.installScript = installScript
+        self.adGroupMembership = adGroupMembership
+        self.required = self.getAdGroupMembership(adGroupMembership)
+    
+    def getAdGroupMembership(self, adGroupName):
+        ecclDir = "/Applications/Enterprise Connect.app/Contents/SharedSupport/"
+        try:
+            e1 = subprocess.Popen([ecclDir + 'eccl', '-p', 'connectionStatus'], stdout=subprocess.PIPE)
+            command = e1.communicate()
+            if "false" in command[0]:
+                print("Enterprise Connect is not connected to the corporate network.")
+                return False
+            # Return true or false if the user is in the group
+            e1 = subprocess.Popen([ecclDir + 'eccl', '-a', 'memberOf'], stdout=subprocess.PIPE)
+            output, err = e1.communicate()
+            if adGroupName in output:
+                #print "Found the group in the users groupmembership"
+                print("User belongs to %s" % adGroupName)
+                return True
+            else:
+                return False
+        except Exception as error:
+            print("Failed to run Active Directory Membership Check Command with Error: %s " % error)
+            return False
+            
+
+usSig = $companySignature("usSig", "Fortune 100 Best Companies", scriptInstallDir + "sigus.scpt", "")
+corpSig = $companySignature("corpSig", "$company Corporate Brand", scriptInstallDir + "sigbrand.scpt", "")
+emeaSig = $companySignature("emeaSig", "BPTW - EMEA", scriptInstallDir + "sigemea.scpt", "APP-MAC-$company Signatures EMEA")
+ukSig = $companySignature("ukSig", "BPTW - UK", scriptInstallDir + "siguk.scpt", "APP-MAC-$company Signatures UK")
+irelandSig = $companySignature("irelandSig", "BPTW - Ireland", scriptInstallDir + "sigireland.scpt", "APP-MAC-$company Signatures Ireland")
+germanySig = $companySignature("germanySig", "BPTW - Germany", scriptInstallDir + "siggermany.scpt", "APP-MAC-$company Signatures Germany")
+
+signatureObjectArray = [ usSig, corpSig, emeaSig, ukSig, irelandSig, germanySig ]
+
+def main():
+    signatureFileArray = folderLookup()
+
+    print ("Number of Signature Files Found: %s" %len(signatureFileArray))
+    if len(signatureFileArray) != 0:
+        for file in signatureFileArray:
+            #print file
+            for sigObject in signatureObjectArray:
+                sigStatus, sigTitle = checkSigFile(file, sigObject.keyphrase)
+                #print("sigstatus:")
+                #print sigStatus
+                if sigStatus:
+                    sigObject.signatureFilePath = file
+                    sigObject.exists = sigStatus
+                    print("Found %s in %s" % (sigObject.title, sigObject.signatureFilePath))
+    else:
+        print("No $company signatures exist in %s" % signatureFolder)
+    FinalInstallProcess()
+
+def folderLookup():
+    signatureFileArray = []
+    for dirname, subdirlist, filelist in os.walk(signatureFolder):
+        for file in filelist:
+            if file.endswith("olk15Signature"):
+                signatureFileArray.append(os.path.join(dirname, file))
+    return signatureFileArray
+
+def FinalInstallProcess():
+    for sigObject in signatureObjectArray: 
+        if sigObject.exists is False and sigObject.required is True:
+            print("%s missing, installing now..." % sigObject.title)
+            installSignature(sigObject.installScript)
+
+def installSignature(installScript):
+    if not os.path.isfile(installScript):
+        print("Error: Can not find the installer at %s, skipping..." % installScript)
+        return
+    try:
+        print("Installing script at %s with parameters %s, %s, %s, %s" % (installScript, userData.firstName, userData.jobTitle, userData.phoneNumber, userData.emailAddress))
+        if currentUser == "root":
+            #p1 = subprocess.Popen(['sudo', '-u', userName, 'sh', installScript, userData.firstName, userData.jobTitle, userData.phoneNumber, userData.emailAddress], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            p1 = subprocess.Popen(['sudo', '-u', userName, '/usr/bin/osascript', installScript, userData.firstName, userData.jobTitle, userData.phoneNumber, userData.emailAddress], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print p1.communicate()
+        else:
+            #p1 = subprocess.Popen(['sh', installScript, userData.firstName, userData.jobTitle, userData.phoneNumber, userData.emailAddress], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            p1 = subprocess.Popen(['/usr/bin/osascript', installScript, userData.firstName, userData.jobTitle, userData.phoneNumber, userData.emailAddress], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            print p1.communicate()
+    except Exception as error:
+        print("Something failed with error: %s" % error)
+        return False
+
+def checkSigFile(filePath, keyWord):
+    #print("Passed in file path, keyword: %s" % (filePath))
+    try:
+        p1 = subprocess.Popen(['cat', filePath], stdout=subprocess.PIPE)
+        #print p1.stdout.read()
+        p2 = subprocess.Popen(['LC_CTYPE=C tr -d \'\\000\''], stdin=p1.stdout, stdout=subprocess.PIPE, shell=True)
+        output, err = p2.communicate()
+        #print output
+        if keyWord not in output:
+            return (False, "")
+
+    except Exception as error:
+        print("Something failed with error: %s" % error)
+        return (False, "")
+    return (True, output)
+        
+
+if __name__ == "__main__":
+    main()
